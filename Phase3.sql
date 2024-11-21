@@ -604,27 +604,61 @@ FROM ClientServicePaymentsView
 ORDER BY PaymentDate, ClientFullName, ServiceName;
 
 -- fraud claims
+DROP VIEW IF EXISTS ClientSummaryFiltered;
+CREATE VIEW ClientSummaryFiltered AS
 SELECT 
-    RC.ClientID,
-    CONCAT(C.FirstName, ' ', COALESCE(C.MiddleName, ''), ' ', C.LastName) AS ClientName,
-    E.EmployeeID,
-    CONCAT(E.FirstName, ' ', COALESCE(E.MiddleName, ''), ' ', E.LastName) AS EmployeeName,
-    TO_CHAR(RC.DateCreated, 'YYYY-MM') AS ClaimMonth,
-    COUNT(*) AS ClaimCount,
-    SUM(RC.Amount) AS TotalAmount,
-    (MAX(RC.DateCreated) - MIN(RC.DateCreated)) AS ClaimPeriod 
-FROM RequestClaim RC
-JOIN Client C ON RC.ClientID = C.ClientID
-JOIN Employee E ON RC.EmployeeID = E.EmployeeID
-GROUP BY RC.ClientID, ClaimMonth, E.EmployeeID, C.FirstName, C.LastName, E.FirstName, E.LastName, C.MiddleName, E.MiddleName
-HAVING COUNT(*) > 5 
-   AND SUM(RC.Amount) > 50000
-   AND (MAX(RC.DateCreated) - MIN(RC.DateCreated)) < 30; 
+    rc.ClientID,
+    CONCAT(c.FirstName, ' ', COALESCE(c.MiddleName, ''), ' ', c.LastName) AS ClientName,
+    COUNT(*) AS TotalClaims,
+    SUM(rc.Amount) AS TotalAmount,
+    ROUND(SUM(CASE WHEN rc.ApprovalStatus = 'Rejected' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS RejectionRate
+FROM RequestClaim rc
+JOIN Client c ON rc.ClientID = c.ClientID
+WHERE rc.DateCreated >= NOW() - INTERVAL '3 MONTH'
+GROUP BY rc.ClientID, c.FirstName, c.MiddleName, c.LastName
+HAVING COUNT(*) > 10 AND SUM(rc.Amount) > 100000 
+ORDER BY TotalClaims DESC;
+SELECT * FROM ClientSummaryFiltered;
 
 INSERT INTO RequestClaim (EmployeeID, ClientID, DateCreated, Amount, ApprovalStatus, DecisionDate) VALUES
-('EMP00005', 'CLI00001', '2024-01-06', 25000, 'Pending', NULL),
-('EMP00006', 'CLI00001', '2024-01-06', 50000, 'Pending', NULL),
-('EMP00005', 'CLI00001', '2024-01-07', 2000, 'Pending', NULL),
-('EMP00007', 'CLI00001', '2024-01-06', 5000, 'Pending', NULL),
-('EMP00008', 'CLI00001', '2024-01-06', 25000, 'Pending', NULL),
-('EMP00001', 'CLI00001', '2024-01-06', 50000, 'Pending', NULL);
+('EMP00008', 'CLI00001', '2024-11-08', 25000, 'Rejected', NULL),
+('EMP00009', 'CLI00001', '2024-11-06', 25000, 'Rejected', NULL),
+('EMP00008', 'CLI00001', '2024-11-07', 25000, 'Rejected', NULL),
+('EMP00001', 'CLI00001', '2024-10-08', 50000, 'Rejected', NULL),
+('EMP00008', 'CLI00001', '2024-10-08', 25000, 'Rejected', NULL),
+('EMP00009', 'CLI00001', '2024-11-16', 25000, 'Rejected', NULL),
+('EMP00008', 'CLI00001', '2024-09-07', 25000, 'Rejected', NULL),
+('EMP00008', 'CLI00001', '2024-09-08', 25000, 'Rejected', NULL),
+('EMP00009', 'CLI00001', '2024-11-10', 25000, 'Rejected', NULL),
+('EMP00008', 'CLI00001', '2024-11-17', 25000, 'Rejected', NULL),
+('EMP00001', 'CLI00001', '2024-11-18', 50000, 'Rejected', NULL);
+SELECT * FROM RequestClaim where ClientID = 'CLI00001';
+
+-- client spending in different HCP
+CREATE VIEW HealthcareProviderServicePayments AS
+SELECT ed.HealthcareProviderId,
+c.ClientID,
+ms.ServiceName,
+pr.Date,
+p.Amount AS AmountPaid
+FROM EmployDoctor ed
+JOIN Provide pr ON ed.DoctorID = pr.DoctorID
+JOIN Client c ON pr.ClientID = c.ClientID
+JOIN MedicalService ms ON pr.ServiceID = ms.ServiceID
+JOIN Pays p ON c.ClientID = p.ClientID;
+
+SELECT * FROM HealthcareProviderServicePayments;
+
+-- agent revenue
+CREATE VIEW AgentEarningsAnnually AS
+SELECT s.AgentID,
+EXTRACT(YEAR FROM p.StartDate) AS Year,
+COUNT(s.ClientID) AS TotalClients,
+SUM(p.ExactCost) AS TotalRevenue,
+ROUND(SUM(a.CommissionRate/100 * p.ExactCost), 2) AS TotalCommission
+FROM Sell s
+JOIN Policy p ON s.PolicyNumber = p.PolicyNumber
+JOIN Agent a ON s.AgentID = a.AgentID
+GROUP BY s.AgentID, EXTRACT(YEAR FROM p.StartDate)
+ORDER BY TotalRevenue DESC;
+SELECT * FROM AgentEarningsAnnually;
