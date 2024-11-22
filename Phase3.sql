@@ -560,6 +560,7 @@ GROUP BY H.HealthcareProviderID, H.ProviderName, IP.CoverageLevel
 ORDER BY H.HealthcareProviderID, IP.CoverageLevel;
 
 -- the spendings of the clients in different healthcare providers
+DROP VIEW IF EXISTS ClientServicePaymentsView;
 CREATE VIEW ClientServicePaymentsView AS 
 WITH ClientServicePayments AS ( 
 	SELECT 
@@ -635,6 +636,7 @@ INSERT INTO RequestClaim (EmployeeID, ClientID, DateCreated, Amount, ApprovalSta
 SELECT * FROM RequestClaim where ClientID = 'CLI00001';
 
 -- client spending in different HCP
+DROP VIEW IF EXISTS HealthcareProviderServicePayments;
 CREATE VIEW HealthcareProviderServicePayments AS
 SELECT ed.HealthcareProviderId,
 c.ClientID,
@@ -650,6 +652,7 @@ JOIN Pays p ON c.ClientID = p.ClientID;
 SELECT * FROM HealthcareProviderServicePayments;
 
 -- agent revenue
+DROP VIEW IF EXISTS AgentEarningsAnnually;
 CREATE VIEW AgentEarningsAnnually AS
 SELECT s.AgentID,
 EXTRACT(YEAR FROM p.StartDate) AS Year,
@@ -662,3 +665,43 @@ JOIN Agent a ON s.AgentID = a.AgentID
 GROUP BY s.AgentID, EXTRACT(YEAR FROM p.StartDate)
 ORDER BY TotalRevenue DESC;
 SELECT * FROM AgentEarningsAnnually;
+
+-- top 5 monthly revenue by service in a specific healthcare provider
+DROP VIEW IF EXISTS Top5MonthlyServiceSummary;
+CREATE VIEW Top5MonthlyServiceSummary AS
+WITH RankedServices AS (
+	SELECT ed.HealthcareProviderId,
+	       ms.ServiceID,
+	       ms.ServiceName,
+	       CONCAT(
+	           EXTRACT(YEAR FROM pr.Date)::TEXT, '-', 
+	           LPAD(EXTRACT(MONTH FROM pr.Date)::TEXT, 2, '0')
+	       ) AS ServicePeriod,
+	       COUNT(*) AS TotalUses,
+	       SUM(pr.ServiceCost) AS TotalGenerated,
+	       ROW_NUMBER() OVER (
+	           PARTITION BY ed.HealthcareProviderId, EXTRACT(YEAR FROM pr.Date), EXTRACT(MONTH FROM pr.Date)
+	           ORDER BY SUM(pr.ServiceCost) DESC
+	       ) AS Rank
+	FROM Provide pr
+	JOIN MedicalService ms ON pr.ServiceID = ms.ServiceID
+	JOIN EmployDoctor ed ON pr.DoctorID = ed.DoctorID
+	GROUP BY ed.HealthcareProviderId, ms.ServiceID, ms.ServiceName, EXTRACT(YEAR FROM pr.Date), EXTRACT(MONTH FROM pr.Date)
+)
+
+SELECT HealthcareProviderID, ServiceID, ServiceName, ServicePeriod, TotalUses, TotalGenerated
+FROM RankedServices
+WHERE Rank <= 5
+ORDER BY HealthcareProviderID, ServicePeriod, TotalGenerated DESC;
+
+SELECT * FROM Top5MonthlyServiceSummary;
+
+INSERT INTO Provide (ClientID, DoctorID, ServiceID, Date, ServiceCost) VALUES
+('CLI00005', 'DOC00001', 'MDS00001', '2024-10-01', 100),
+('CLI00002', 'DOC00001', 'MDS00010', '2024-10-02', 150),
+('CLI00009', 'DOC00001', 'MDS00004', '2024-10-04', 200),
+('CLI00001', 'DOC00005', 'MDS00002', '2024-10-04', 400),
+('CLI00010', 'DOC00005', 'MDS00009', '2024-10-05', 250),
+('CLI00004', 'DOC00001', 'MDS00005', '2024-10-06', 80),
+('CLI00006', 'DOC00001', 'MDS00008', '2024-10-07', 120),
+('CLI00008', 'DOC00005', 'MDS00003', '2024-10-09', 500);
