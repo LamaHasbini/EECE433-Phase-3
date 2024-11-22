@@ -705,3 +705,205 @@ INSERT INTO Provide (ClientID, DoctorID, ServiceID, Date, ServiceCost) VALUES
 ('CLI00004', 'DOC00001', 'MDS00005', '2024-10-06', 80),
 ('CLI00006', 'DOC00001', 'MDS00008', '2024-10-07', 120),
 ('CLI00008', 'DOC00005', 'MDS00003', '2024-10-09', 500);
+
+-- total profit of company
+CREATE OR REPLACE VIEW TotalCompanyProfitPastYear AS
+WITH RevenueFromPolicies AS (
+    SELECT SUM(p.ExactCost - (a.CommissionRate / 100) * p.ExactCost) AS PoliciesRevenue
+    FROM Policy p
+    JOIN Sell s ON p.PolicyNumber = s.PolicyNumber
+    JOIN Agent a ON s.AgentID = a.AgentID
+    WHERE p.StartDate >= CURRENT_DATE - INTERVAL '1 year'
+),
+RevenueFromPayments AS (
+    SELECT SUM(py.Amount) AS PaymentRevenue
+    FROM Pays py
+    WHERE py.Date >= CURRENT_DATE - INTERVAL '1 year'
+),
+NetRevenue AS (
+    SELECT ROUND((SELECT PoliciesRevenue FROM RevenueFromPolicies) + (SELECT PaymentRevenue FROM RevenueFromPayments), 2) AS TotalRevenue
+),
+TotalEmployeeSalary AS (
+    SELECT SUM(e.Salary * 12) AS TotalEmployeeSalaries
+    FROM Employee e
+),
+TotalClaimAmount AS (
+    SELECT SUM(CASE WHEN rc.ApprovalStatus = 'Approved' THEN rc.Amount ELSE 0 END) AS TotalClaims
+    FROM RequestClaim rc
+    WHERE rc.DateCreated >= CURRENT_DATE - INTERVAL '1 year'
+),
+NetExpenses AS (
+    SELECT ROUND((SELECT TotalEmployeeSalaries FROM TotalEmployeeSalary) + (SELECT TotalClaims FROM TotalClaimAmount), 2) AS TotalExpenses
+),
+Profit AS (
+    SELECT ROUND((SELECT TotalRevenue FROM NetRevenue) - (SELECT TotalExpenses FROM NetExpenses), 2) AS NetProfit
+)
+SELECT 
+    (SELECT TotalRevenue FROM NetRevenue) AS TotalRevenue, 
+    (SELECT TotalExpenses FROM NetExpenses) AS TotalExpenses, 
+    (SELECT NetProfit FROM Profit) AS NetProfit;
+SELECT * FROM TotalCompanyProfitPastYear;
+
+-- top 10 medical conditions & their services
+WITH ConditionFrequency AS (
+    SELECT mr.ConditionName, COUNT(mr.ClientID) AS ConditionCount
+    FROM MedicalRecords mr
+    GROUP BY mr.ConditionName
+    ORDER BY ConditionCount DESC
+    LIMIT 10
+),
+ServicesForConditions AS (
+    SELECT cf.ConditionName,
+	cf.ConditionCount, 
+	ms.ServiceName,
+	ip.CoverageLevel,
+	COUNT(DISTINCT pr.ClientID) AS ClientsServed
+    FROM ConditionFrequency cf
+    JOIN MedicalRecords mr ON cf.ConditionName = mr.ConditionName
+    JOIN Provide pr ON mr.ClientID = pr.ClientID
+    JOIN MedicalService ms ON pr.ServiceID = ms.ServiceID
+    JOIN Sell sl ON mr.ClientID = sl.ClientID
+    JOIN Policy pl ON sl.PolicyNumber = pl.PolicyNumber
+    JOIN InsurancePlan ip ON pl.InsurancePlanName = ip.InsurancePlanName
+    GROUP BY cf.ConditionName, cf.ConditionCount, ms.ServiceName, ip.CoverageLevel
+)
+SELECT 
+    ConditionName,
+    ConditionCount, 
+    ServiceName,
+    CoverageLevel,
+    ClientsServed
+FROM ServicesForConditions
+ORDER BY ConditionCount DESC, ConditionName, CoverageLevel, ClientsServed DESC;
+
+INSERT INTO MedicalRecords (ClientID, ICDCode, DateCreated, ConditionName, Description) VALUES
+('CLI00009', 'A01.0', '2024-01-15', 'Typhoid Fever', 'Acute bacterial infection'),
+('CLI00009', 'L50.0', '2024-04-10', 'Urticaria', 'Condition with red, itchy welts'),
+('CLI00008', 'L50.0', '2024-03-10', 'Urticaria', 'Condition with red, itchy welts');
+
+-- high risk client
+WITH AggregatedMedicalRecords AS (
+    SELECT ClientID, 
+	COUNT(DISTINCT ICDCode) AS MedicalRecordCount
+    FROM MedicalRecords
+    GROUP BY ClientID
+),
+AggregatedRequestClaims AS (
+    SELECT ClientID, 
+        SUM(CASE 
+            WHEN ApprovalStatus IN ('Approved', 'Pending') THEN Amount 
+            ELSE 0 
+        END) AS TotalClaimAmount
+    FROM RequestClaim
+    GROUP BY ClientID
+),
+AggregatedDependents AS (
+    SELECT ClientID, COUNT(*) AS NumberOfDependents
+    FROM ClientDependent
+    GROUP BY ClientID
+)
+SELECT c.ClientID,
+CONCAT(c.FirstName, ' ', COALESCE(c.MiddleName, ''), ' ', c.LastName) AS ClientName,
+    COALESCE(mr.MedicalRecordCount, 0) AS MedicalRecordCount,
+    COALESCE(rc.TotalClaimAmount, 0) AS TotalClaimAmount,
+    COALESCE(dep.NumberOfDependents, 0) AS NumberOfDependents
+FROM Client c
+LEFT JOIN AggregatedMedicalRecords mr ON c.ClientID = mr.ClientID
+LEFT JOIN AggregatedRequestClaims rc ON c.ClientID = rc.ClientID
+LEFT JOIN AggregatedDependents dep ON c.ClientID = dep.ClientID
+WHERE COALESCE(mr.MedicalRecordCount, 0) > 10 
+	AND COALESCE(rc.TotalClaimAmount, 0) > 100000
+    AND COALESCE(dep.NumberOfDependents, 0) > 0
+ORDER BY rc.TotalClaimAmount DESC;
+	
+INSERT INTO RequestClaim (EmployeeID, ClientID, DateCreated, Amount, ApprovalStatus, DecisionDate)
+VALUES 
+('EMP00001', 'CLI00005', '2024-01-15', 40000.00, 'Approved', '2024-01-20'),
+('EMP00002', 'CLI00005', '2024-02-10', 35000.00, 'Approved', '2024-02-12'),
+('EMP00003', 'CLI00005', '2024-03-01', 30000.00, 'Approved', '2024-03-05');
+INSERT INTO MedicalRecords (ClientID, ICDCode, ConditionName, Description)
+VALUES 
+('CLI00005', 'I10', 'Essential Hypertension', 'Chronic high blood pressure without a known secondary cause.'),
+('CLI00005', 'E11.9', 'Type 2 Diabetes Mellitus', 'A form of diabetes where the body does not properly use insulin, typically occurring in adulthood.'),
+('CLI00005', 'J45.40', 'Moderate Persistent Asthma', 'A chronic inflammatory disease of the airways characterized by wheezing, breathlessness, and coughing.'),
+('CLI00005', 'M81.0', 'Osteoporosis, Age-Related', 'A condition where bones become weak and brittle, often occurring as a result of aging.'),
+('CLI00005', 'F41.9', 'Anxiety Disorder', 'A mental health condition characterized by excessive worry, fear, or anxiety.'),
+('CLI00005', 'C50.9', 'Breast Cancer', 'A malignant tumor that originates in the cells of the breast.'),
+('CLI00005', 'N40', 'Benign Prostatic Hyperplasia', 'Enlargement of the prostate gland, a common condition in older men that can cause urinary problems.'),
+('CLI00005', 'L40.0', 'Psoriasis Vulgaris', 'A chronic autoimmune skin condition that leads to the rapid buildup of skin cells, forming scaly patches.'),
+('CLI00005', 'J44.9', 'Chronic Obstructive Pulmonary Disease (COPD)', 'A group of lung diseases that block airflow and make it difficult to breathe, often caused by smoking.'),
+('CLI00005', 'I63.9', 'Cerebrovascular Accident (Stroke)', 'A medical emergency where blood flow to a part of the brain is interrupted, leading to brain cell death.');
+
+INSERT INTO RequestClaim (EmployeeID, ClientID, DateCreated, Amount, ApprovalStatus, DecisionDate)
+VALUES 
+('EMP00001', 'CLI00007', '2024-01-15', 40000.00, 'Approved', '2024-01-20'),
+('EMP00002', 'CLI00007', '2024-02-10', 35000.00, 'Approved', '2024-02-12'),
+('EMP00003', 'CLI00007', '2024-03-01', 30000.00, 'Approved', '2024-03-05');
+INSERT INTO MedicalRecords (ClientID, ICDCode, ConditionName, Description)
+VALUES 
+('CLI00007', 'I10', 'Essential Hypertension', 'Chronic high blood pressure without a known secondary cause.'),
+('CLI00007', 'E11.9', 'Type 2 Diabetes Mellitus', 'A form of diabetes where the body does not properly use insulin, typically occurring in adulthood.'),
+('CLI00007', 'J45.40', 'Moderate Persistent Asthma', 'A chronic inflammatory disease of the airways characterized by wheezing, breathlessness, and coughing.'),
+('CLI00007', 'M81.0', 'Osteoporosis, Age-Related', 'A condition where bones become weak and brittle, often occurring as a result of aging.'),
+('CLI00007', 'F41.9', 'Anxiety Disorder', 'A mental health condition characterized by excessive worry, fear, or anxiety.'),
+('CLI00007', 'C50.9', 'Breast Cancer', 'A malignant tumor that originates in the cells of the breast.'),
+('CLI00007', 'N40', 'Benign Prostatic Hyperplasia', 'Enlargement of the prostate gland, a common condition in older men that can cause urinary problems.'),
+('CLI00007', 'L40.0', 'Psoriasis Vulgaris', 'A chronic autoimmune skin condition that leads to the rapid buildup of skin cells, forming scaly patches.'),
+('CLI00007', 'J44.9', 'Chronic Obstructive Pulmonary Disease (COPD)', 'A group of lung diseases that block airflow and make it difficult to breathe, often caused by smoking.'),
+('CLI00007', 'I63.9', 'Cerebrovascular Accident (Stroke)', 'A medical emergency where blood flow to a part of the brain is interrupted, leading to brain cell death.');
+
+-- network utilization and coverage gap
+WITH ActivePolicies AS (
+    SELECT s.ClientID, s.PolicyNumber, p.StartDate, p.EndDate, c.InsurancePlanName, c.HealthcareProviderID
+    FROM Sell s
+    INNER JOIN Policy p ON s.PolicyNumber = p.PolicyNumber
+    INNER JOIN Covers c ON p.InsurancePlanName = c.InsurancePlanName
+    WHERE p.EndDate >= CURRENT_DATE
+),
+ProviderUsage AS (
+    SELECT ap.ClientID, ap.HealthcareProviderID, h.ProviderName, COUNT(DISTINCT pr.ServiceID) AS ServicesUsed
+    FROM ActivePolicies ap
+    LEFT JOIN Provide pr ON ap.ClientID = pr.ClientID
+        AND pr.DoctorID IN (
+            SELECT DoctorID FROM EmployDoctor WHERE HealthcareProviderID = ap.HealthcareProviderID
+        )
+    LEFT JOIN HealthcareProvider h ON ap.HealthcareProviderID = h.HealthcareProviderID
+    GROUP BY ap.ClientID, ap.HealthcareProviderID, h.ProviderName
+),
+UnusedProviders AS (
+    SELECT DISTINCT h.HealthcareProviderID, h.ProviderName, c.InsurancePlanName
+    FROM Covers c
+    LEFT JOIN ProviderUsage pu ON c.HealthcareProviderID = pu.HealthcareProviderID
+    LEFT JOIN HealthcareProvider h ON c.HealthcareProviderID = h.HealthcareProviderID
+    WHERE pu.ServicesUsed IS NULL
+)
+SELECT 	up.ProviderName AS UnusedProvider, 
+		up.InsurancePlanName AS CoveredPlan,
+		COUNT(DISTINCT ap.ClientID) AS ClientsCovered,
+    	COUNT(DISTINCT pr.ClientID) AS ClientsUtilizing
+FROM UnusedProviders up
+LEFT JOIN ActivePolicies ap ON up.HealthcareProviderID = ap.HealthcareProviderID
+LEFT JOIN Provide pr ON ap.ClientID = pr.ClientID
+GROUP BY up.ProviderName, up.InsurancePlanName
+ORDER BY ClientsCovered DESC;
+
+-- employees and claims
+WITH EmployeeClaimStats AS (
+SELECT e.EmployeeID,
+		e.FirstName || ' ' || COALESCE(e.MiddleName, '') || ' ' || e.LastName AS EmployeeName,
+        rc.ApprovalStatus,
+        COUNT(rc.ClientID) AS ClaimCount,
+        SUM(rc.Amount) AS TotalClaimAmount
+FROM RequestClaim rc
+INNER JOIN Employee e ON rc.EmployeeID = e.EmployeeID
+GROUP BY e.EmployeeID, e.FirstName, e.MiddleName, e.LastName, rc.ApprovalStatus
+)
+SELECT 
+ecs.EmployeeID,
+ecs.EmployeeName,
+ecs.ApprovalStatus,
+ecs.ClaimCount,
+ecs.TotalClaimAmount,
+ROUND((ecs.ClaimCount::DECIMAL / SUM(ecs.ClaimCount) OVER (PARTITION BY ecs.EmployeeID)) * 100, 2) AS PercentageOfTotalClaims
+FROM EmployeeClaimStats ecs
+ORDER BY ecs.EmployeeID, ecs.ApprovalStatus;
