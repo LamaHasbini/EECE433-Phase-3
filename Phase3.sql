@@ -258,6 +258,9 @@ INSERT INTO Employee (EmployeeID, FirstName, MiddleName, LastName, PhoneNumber, 
 ('EMP00008', 'Dalia', 'Ziad', 'Sayegh', '709012345', 'dalia.sayegh@procare.com', '67 Orchid St, Jounieh', 1750, 'Customer Service Rep'),
 ('EMP00009', 'Noor', 'Fadi', 'Ghazal', '718912345', 'noor.ghazal@procare.com', '89 Pinetree St, Beirut', 2200, 'Account Manager'),
 ('EMP00010', 'Sami', 'Omar', 'Shams', '712345670', 'sami.shams@procare.com', '44 Sunset Ave, Tripoli', 1850, 'Financial Coordinator');
+UPDATE Employee
+SET LastName = 'Bou Khalil'
+WHERE EmployeeID = 'EMP00007';  
 
 INSERT INTO Client (ClientID, FirstName, MiddleName, LastName, DOB, Gender, Email) VALUES
 ('CLI00001', 'Ali', 'Jamal', 'Hajj', '1985-02-14', 'M', 'ali.hajj@email.com'),
@@ -356,6 +359,10 @@ INSERT INTO EmployeeDependent (EmployeeID, FirstName, MiddleName, LastName, DOB,
 ('EMP00008', 'Ziad', 'Jad', 'Sabbagh', '2014-02-28', 'M', 'Son'),
 ('EMP00009', 'Fadi', 'Ayman', 'Ghazal', '1960-04-14', 'M', 'Parent'),
 ('EMP00010', 'Yara', 'Sami', 'Shams', '2012-12-18', 'F', 'Daughter');
+
+UPDATE EmployeeDependent
+SET LastName = 'Bou Khalil'
+WHERE EmployeeID = 'EMP00007'; 
 
 INSERT INTO ClientDependent (ClientID, FirstName, MiddleName, LastName, DOB, Gender, Relationship) VALUES
 ('CLI00001', 'Cynthia', 'Ali', 'Hajj', '2000-01-01', 'F', 'Daughter'),
@@ -543,6 +550,46 @@ SELECT * FROM Refer;
 SELECT * FROM Sell;
 
 -- COMPLEX QUERIES
+-- top 5 monthly revenue by service in a specific healthcare provider
+DROP VIEW IF EXISTS Top5MonthlyServiceSummary;
+CREATE VIEW Top5MonthlyServiceSummary AS
+WITH RankedServices AS (
+	SELECT ed.HealthcareProviderId,
+	       ms.ServiceID,
+	       ms.ServiceName,
+	       CONCAT(
+	           EXTRACT(YEAR FROM pr.Date)::TEXT, '-', 
+	           LPAD(EXTRACT(MONTH FROM pr.Date)::TEXT, 2, '0')
+	       ) AS ServicePeriod,
+	       COUNT(*) AS TotalUses,
+	       SUM(pr.ServiceCost) AS TotalGenerated,
+	       ROW_NUMBER() OVER (
+	           PARTITION BY ed.HealthcareProviderId, EXTRACT(YEAR FROM pr.Date), EXTRACT(MONTH FROM pr.Date)
+	           ORDER BY SUM(pr.ServiceCost) DESC
+	       ) AS Rank
+	FROM Provide pr
+	JOIN MedicalService ms ON pr.ServiceID = ms.ServiceID
+	JOIN EmployDoctor ed ON pr.DoctorID = ed.DoctorID
+	GROUP BY ed.HealthcareProviderId, ms.ServiceID, ms.ServiceName, EXTRACT(YEAR FROM pr.Date), EXTRACT(MONTH FROM pr.Date)
+)
+
+SELECT HealthcareProviderID, ServiceID, ServiceName, ServicePeriod, TotalUses, TotalGenerated
+FROM RankedServices
+WHERE Rank <= 5
+ORDER BY HealthcareProviderID, ServicePeriod, TotalGenerated DESC;
+
+SELECT * FROM Top5MonthlyServiceSummary;
+
+INSERT INTO Provide (ClientID, DoctorID, ServiceID, Date, ServiceCost) VALUES
+('CLI00005', 'DOC00001', 'MDS00001', '2024-10-01', 100),
+('CLI00002', 'DOC00001', 'MDS00010', '2024-10-02', 150),
+('CLI00009', 'DOC00001', 'MDS00004', '2024-10-04', 200),
+('CLI00001', 'DOC00005', 'MDS00002', '2024-10-04', 400),
+('CLI00010', 'DOC00005', 'MDS00009', '2024-10-05', 250),
+('CLI00004', 'DOC00001', 'MDS00005', '2024-10-06', 80),
+('CLI00006', 'DOC00001', 'MDS00008', '2024-10-07', 120),
+('CLI00008', 'DOC00005', 'MDS00003', '2024-10-09', 500);
+
 -- the distribution of clients in the hospitals based on the insurance plans level
 SELECT 
     H.HealthcareProviderID, 
@@ -665,46 +712,6 @@ JOIN Agent a ON s.AgentID = a.AgentID
 GROUP BY s.AgentID, EXTRACT(YEAR FROM p.StartDate)
 ORDER BY TotalRevenue DESC;
 SELECT * FROM AgentEarningsAnnually;
-
--- top 5 monthly revenue by service in a specific healthcare provider
-DROP VIEW IF EXISTS Top5MonthlyServiceSummary;
-CREATE VIEW Top5MonthlyServiceSummary AS
-WITH RankedServices AS (
-	SELECT ed.HealthcareProviderId,
-	       ms.ServiceID,
-	       ms.ServiceName,
-	       CONCAT(
-	           EXTRACT(YEAR FROM pr.Date)::TEXT, '-', 
-	           LPAD(EXTRACT(MONTH FROM pr.Date)::TEXT, 2, '0')
-	       ) AS ServicePeriod,
-	       COUNT(*) AS TotalUses,
-	       SUM(pr.ServiceCost) AS TotalGenerated,
-	       ROW_NUMBER() OVER (
-	           PARTITION BY ed.HealthcareProviderId, EXTRACT(YEAR FROM pr.Date), EXTRACT(MONTH FROM pr.Date)
-	           ORDER BY SUM(pr.ServiceCost) DESC
-	       ) AS Rank
-	FROM Provide pr
-	JOIN MedicalService ms ON pr.ServiceID = ms.ServiceID
-	JOIN EmployDoctor ed ON pr.DoctorID = ed.DoctorID
-	GROUP BY ed.HealthcareProviderId, ms.ServiceID, ms.ServiceName, EXTRACT(YEAR FROM pr.Date), EXTRACT(MONTH FROM pr.Date)
-)
-
-SELECT HealthcareProviderID, ServiceID, ServiceName, ServicePeriod, TotalUses, TotalGenerated
-FROM RankedServices
-WHERE Rank <= 5
-ORDER BY HealthcareProviderID, ServicePeriod, TotalGenerated DESC;
-
-SELECT * FROM Top5MonthlyServiceSummary;
-
-INSERT INTO Provide (ClientID, DoctorID, ServiceID, Date, ServiceCost) VALUES
-('CLI00005', 'DOC00001', 'MDS00001', '2024-10-01', 100),
-('CLI00002', 'DOC00001', 'MDS00010', '2024-10-02', 150),
-('CLI00009', 'DOC00001', 'MDS00004', '2024-10-04', 200),
-('CLI00001', 'DOC00005', 'MDS00002', '2024-10-04', 400),
-('CLI00010', 'DOC00005', 'MDS00009', '2024-10-05', 250),
-('CLI00004', 'DOC00001', 'MDS00005', '2024-10-06', 80),
-('CLI00006', 'DOC00001', 'MDS00008', '2024-10-07', 120),
-('CLI00008', 'DOC00005', 'MDS00003', '2024-10-09', 500);
 
 -- total profit of company
 CREATE OR REPLACE VIEW TotalCompanyProfitPastYear AS
